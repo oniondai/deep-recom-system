@@ -1,6 +1,7 @@
 # coding: utf-8
 import tensorflow as tf
 from tensorflow import feature_column as fc
+import pandas as pd
 # 定义输入参数
 flags = tf.app.flags
 
@@ -9,11 +10,13 @@ flags.DEFINE_string("model_dir", "./model_dir_wide_deep", "Directory where model
 flags.DEFINE_string("output_dir", "./output_dir", "Directory where pb file are saved")
 
 # flags.DEFINE_string("output_model", "./model_output", "Path to the training data.")
-flags.DEFINE_string("train_data", "../../data/criteo_x4/train.tr.tfrecords", "Path to the train data")
-flags.DEFINE_string("eval_data", '../../data/criteo_x4/valid.tr.tfrecords',
+flags.DEFINE_string("train_data", "/data/deep-recom-system/data/criteo_x4/train.tr.tfrecords", "Path to the train data")
+flags.DEFINE_string("eval_data", '/data/deep-recom-system/data/criteo_x4/valid.tr.tfrecords',
                     "Path to the evaluation data")
-flags.DEFINE_integer("num_epochs", 1, "Epoch of training phase")
-flags.DEFINE_integer("train_steps", 1000, "Number of (global) training steps to perform")
+flags.DEFINE_string("test_data", '/data/deep-recom-system/data/criteo_x4/test.tr.tfrecords',
+                    "Path to the evaluation data")
+flags.DEFINE_integer("num_epochs", 2, "Epoch of training phase")
+flags.DEFINE_integer("train_steps", 10000, "Number of (global) training steps to perform")
 flags.DEFINE_integer("shuffle_buffer_size", 10000, "Dataset shuffle buffer size")
 flags.DEFINE_integer("num_parallel_readers", -1, "Number of parallel readers for training data")
 flags.DEFINE_integer("save_checkpoints_steps", 100, "Save checkpoints every this many steps")
@@ -73,6 +76,7 @@ def input_fn_tfr(tfr_file_path, num_epochs, shuffle, batch_size, shuffle_buffer_
     dataset = dataset.prefetch(1)  # 解耦数据读取和模型训练
 
     return dataset
+
 
 # 特征定义
 def build_feature_columns():
@@ -224,9 +228,10 @@ def main(unused_argv):
 				      save_checkpoints_steps=FLAGS.save_checkpoints_steps)
     )
 
+    # num_epochs=FLAGS.num_epochs,
     train_spec = tf.estimator.TrainSpec(
         input_fn=lambda: input_fn_tfr(tfr_file_path=FLAGS.train_data,
-				      num_epochs=FLAGS.num_epochs,
+				      num_epochs=None,
 				      shuffle=True,
 				      batch_size=FLAGS.batch_size),
         max_steps=FLAGS.train_steps
@@ -252,31 +257,38 @@ def main(unused_argv):
 
     eval_spec = tf.estimator.EvalSpec(
         input_fn=lambda: input_fn_tfr(tfr_file_path=FLAGS.eval_data, num_epochs=FLAGS.num_epochs, shuffle=False, batch_size=FLAGS.batch_size),
-        throttle_secs=6,
-        steps=10000,
+        steps=None,
         exporters=exporters
     )
 
     tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
 
-    ## Evaluate Metrics.
-    #metrics = estimator.evaluate(input_fn=lambda: eval_input_fn(filepath=FLAGS.eval_data, example_parser=example_parser, batch_size=FLAGS.batch_size))
-    #for key in sorted(metrics):
-    #    print('%s: %s' % (key, metrics[key]))
+    # 显式的将模型保存在本地, export也可以将模型保存在本地.
+    print("exporting model ...")
+    estimator.export_savedmodel(FLAGS.output_dir, serving_input_receiver_fn)
 
-    ## print("exporting model ...")
-    ## feature_spec = tf.feature_column.make_parse_example_spec(total_feature_columns)
-    ## print(feature_spec)
-    ## serving_input_receiver_fn = tf.estimator.export.build_parsing_serving_input_receiver_fn(feature_spec)
-    ## estimator.export_savedmodel(FLAGS.output_dir, serving_input_receiver_fn)
+    # 打印训练后的指标estimator.evaluate.
+    print("Start Evaluate Metrics")
+    metrics = estimator.evaluate(
+        input_fn=lambda: input_fn_tfr(tfr_file_path=FLAGS.eval_data,
+        			      num_epochs=1,
+        			      shuffle=False,
+        			      batch_size=32))
+    for key in sorted(metrics):
+        print('%s: %s' % (key, metrics[key]))
 
-    #results = estimator.predict(input_fn=lambda: eval_input_fn(filepath=FLAGS.eval_data, example_parser=example_parser, batch_size=FLAGS.batch_size))
-    #predicts_df = pd.DataFrame.from_dict(results)
-    #predicts_df['probabilities'] = predicts_df['probabilities'].apply(lambda x: x[0])
-    #test_df = pd.read_csv("../../dataset/wechat_algo_data1/dataframe/test.csv")
-    #predicts_df['read_comment'] = test_df['read_comment']
-    #predicts_df.to_csv("predictions.csv")
-    #print("after evaluate")
+    # 打印预测结果 estimator.predict
+    results = estimator.predict(
+        input_fn=lambda: input_fn_tfr(tfr_file_path=FLAGS.eval_data,
+        			      num_epochs=1,
+        			      shuffle=False,
+        			      batch_size=32))
+    predicts_df = pd.DataFrame.from_dict(results)
+    predicts_df['probabilities'] = predicts_df['probabilities'].apply(lambda x: x[0])
+    test_df = pd.read_csv("/data/deep-recom-system/data/criteo_x4/valid.csv_demo")
+    predicts_df['Label'] = test_df['Label']
+    predicts_df.to_csv("predictions.csv")
+    print("after evaluate")
 
 if __name__ == "__main__":
     tf.logging.set_verbosity(tf.logging.INFO)

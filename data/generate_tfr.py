@@ -52,3 +52,4 @@ if __name__ == "__main__":
 
         out_tfr = "%s.tr.tfrecords" % (data_file.split(".csv")[0])
         write_tfrecord(out_tfr, data, sparse_features, dense_features, target)
+        print("%s done !" % out_tfr)
