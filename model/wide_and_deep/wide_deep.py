@@ -1,4 +1,6 @@
+# coding: utf-8
 import tensorflow as tf
+from tensorflow import feature_column as fc
 # 定义输入参数
 flags = tf.app.flags
 
@@ -7,8 +9,8 @@ flags.DEFINE_string("model_dir", "./model_dir_wide_deep", "Directory where model
 flags.DEFINE_string("output_dir", "./output_dir", "Directory where pb file are saved")
 
 # flags.DEFINE_string("output_model", "./model_output", "Path to the training data.")
-flags.DEFINE_string("train_data", "./criteo_x4/train.tr.tfrecords", "Path to the train data")
-flags.DEFINE_string("eval_data", './criteo_x4/eval.tr.tfrecords',
+flags.DEFINE_string("train_data", "../../data/criteo_x4/train.tr.tfrecords", "Path to the train data")
+flags.DEFINE_string("eval_data", '../../data/criteo_x4/valid.tr.tfrecords',
                     "Path to the evaluation data")
 flags.DEFINE_integer("num_epochs", 1, "Epoch of training phase")
 flags.DEFINE_integer("train_steps", 1000, "Number of (global) training steps to perform")
@@ -26,6 +28,9 @@ flags.DEFINE_string("hidden_units", "512,256,128",
                     "Comma-separated list of number of units in each hidden layer of the deep part")
 flags.DEFINE_boolean("batch_norm", True, "Perform batch normalization (True or False)")
 flags.DEFINE_float("dropout_rate", 0, "Dropout rate")
+flags.DEFINE_string("exporter", "final", "Model exporter type")
+
+FLAGS = flags.FLAGS
 
 
 def _example_parser(tfr_data):
@@ -33,45 +38,41 @@ def _example_parser(tfr_data):
     sparse_feature_names = ['C' + str(i) for i in range(1, 27)]
     dense_feature_names = ['I' + str(i) for i in range(1, 14)]
     label_name = ['Label']
-    
+
     # 定义使用 tf.parse_single_example 解析的特征字典
     feature_description = {}
-    
+
     # 定义类别sparse特征的解析方式
     for category_feature in sparse_feature_names:
         feature_description[category_feature] = tf.FixedLenFeature(dtype=tf.string, shape=[1])
-    
+
     # 定义数值dense特征的解析方式
     for dense_feature in dense_feature_names:
         feature_description[dense_feature] = tf.FixedLenFeature(dtype=tf.float32, shape=[1])
-    
+
     # 定义标签特征的解析方式
     for label in label_name:
         feature_description[label] = tf.FixedLenFeature(dtype=tf.float32, shape=[1])
-    
+
     # 解析样本
     parsed_features = tf.parse_single_example(tfr_data, feature_description)
-    
+
     labels = parsed_features.pop('Label')
-    
-    return parsed_features, labels
+
+    return parsed_features, {"Label": labels}
 
 def input_fn_tfr(tfr_file_path, num_epochs, shuffle, batch_size, shuffle_buffer_size=10000):
     dataset = tf.data.TFRecordDataset(tfr_file_path)
     dataset = dataset.map(_example_parser, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-    
+
     if shuffle:
         dataset = dataset.shuffle(buffer_size=shuffle_buffer_size)
-        
+
     dataset = dataset.repeat(num_epochs)
     dataset = dataset.batch(batch_size)
     dataset = dataset.prefetch(1)  # 解耦数据读取和模型训练
-    
+
     return dataset
-
-
-import tensorflow as tf
-from tensorflow import feature_column as fc
 
 # 特征定义
 def build_feature_columns():
@@ -84,12 +85,12 @@ def build_feature_columns():
     # 对于sparse类别特征，转成embed.
     for i, feat in enumerate(sparse_features):
         dnn_feature_columns.append(fc.embedding_column(
-            fc.categorical_column_with_identity(feat, 1000), 4))
-        linear_feature_columns.append(fc.categorical_column_with_identity(feat, 1000))
+            fc.categorical_column_with_hash_bucket(feat, 1000), 4))
+        #linear_feature_columns.append(fc.categorical_column_with_identity(feat, 1000))
 
     # 对于dense特征，使用原值.
     for feat in dense_features:
-        dnn_feature_columns.append(fc.numeric_column(feat))
+        #dnn_feature_columns.append(fc.numeric_column(feat))
         linear_feature_columns.append(fc.numeric_column(feat))
 
     return dnn_feature_columns, linear_feature_columns
@@ -219,49 +220,63 @@ def main(unused_argv):
     estimator = tf.estimator.Estimator(
         model_fn=wide_and_deep_model_fn,
         params=params,
-        config=tf.estimator.RunConfig(model_dir=FLAGS.model_dir, save_checkpoints_steps=FLAGS.save_checkpoints_steps)
+        config=tf.estimator.RunConfig(model_dir=FLAGS.model_dir,
+				      save_checkpoints_steps=FLAGS.save_checkpoints_steps)
     )
 
     train_spec = tf.estimator.TrainSpec(
-        input_fn=lambda: input_fn_tfr(filepath=FLAGS.train_data, num_epochs=FLAGS.num_epochs, shuffle=True, batch_size=FLAGS.batch_size),
+        input_fn=lambda: input_fn_tfr(tfr_file_path=FLAGS.train_data,
+				      num_epochs=FLAGS.num_epochs,
+				      shuffle=True,
+				      batch_size=FLAGS.batch_size),
         max_steps=FLAGS.train_steps
     )
 
     feature_spec = tf.feature_column.make_parse_example_spec(total_feature_columns)
     serving_input_receiver_fn = tf.estimator.export.build_parsing_serving_input_receiver_fn(feature_spec)
-    exporters = [
-        tf.estimator.BestExporter(
-            name="best_exporter",
+
+    if FLAGS.exporter == "latest":
+        exporter = tf.estimator.LatestExporter(
+            name='latest_exporter',
+            serving_input_receiver_fn=serving_input_receiver_fn)
+    elif FLAGS.exporter == "best":
+        exporter = tf.estimator.BestExporter(
+            name='best_exporter',
             serving_input_receiver_fn=serving_input_receiver_fn,
-            exports_to_keep=5)
-    ]
+	    exports_to_keep=5)
+    else:
+        exporter = tf.estimator.FinalExporter(
+            name='final_exporter',
+            serving_input_receiver_fn=serving_input_receiver_fn)
+    exporters = [exporter]
+
     eval_spec = tf.estimator.EvalSpec(
-        input_fn=lambda: input_fn_tfr(filepath=FLAGS.eval_data, num_epochs=FLAGS.num_epochs, shuffle=False, batch_size=FLAGS.batch_size),
-        throttle_secs=600,
-        steps=None,
+        input_fn=lambda: input_fn_tfr(tfr_file_path=FLAGS.eval_data, num_epochs=FLAGS.num_epochs, shuffle=False, batch_size=FLAGS.batch_size),
+        throttle_secs=6,
+        steps=10000,
         exporters=exporters
     )
 
     tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
 
-#     # Evaluate Metrics.
-#     metrics = estimator.evaluate(input_fn=lambda: eval_input_fn(filepath=FLAGS.eval_data, example_parser=example_parser, batch_size=FLAGS.batch_size))
-#     for key in sorted(metrics):
-#         print('%s: %s' % (key, metrics[key]))
+    ## Evaluate Metrics.
+    #metrics = estimator.evaluate(input_fn=lambda: eval_input_fn(filepath=FLAGS.eval_data, example_parser=example_parser, batch_size=FLAGS.batch_size))
+    #for key in sorted(metrics):
+    #    print('%s: %s' % (key, metrics[key]))
 
-#     # print("exporting model ...")
-#     # feature_spec = tf.feature_column.make_parse_example_spec(total_feature_columns)
-#     # print(feature_spec)
-#     # serving_input_receiver_fn = tf.estimator.export.build_parsing_serving_input_receiver_fn(feature_spec)
-#     # estimator.export_savedmodel(FLAGS.output_dir, serving_input_receiver_fn)
+    ## print("exporting model ...")
+    ## feature_spec = tf.feature_column.make_parse_example_spec(total_feature_columns)
+    ## print(feature_spec)
+    ## serving_input_receiver_fn = tf.estimator.export.build_parsing_serving_input_receiver_fn(feature_spec)
+    ## estimator.export_savedmodel(FLAGS.output_dir, serving_input_receiver_fn)
 
-#     results = estimator.predict(input_fn=lambda: eval_input_fn(filepath=FLAGS.eval_data, example_parser=example_parser, batch_size=FLAGS.batch_size))
-#     predicts_df = pd.DataFrame.from_dict(results)
-#     predicts_df['probabilities'] = predicts_df['probabilities'].apply(lambda x: x[0])
-#     test_df = pd.read_csv("../../dataset/wechat_algo_data1/dataframe/test.csv")
-#     predicts_df['read_comment'] = test_df['read_comment']
-#     predicts_df.to_csv("predictions.csv")
-#     print("after evaluate")
+    #results = estimator.predict(input_fn=lambda: eval_input_fn(filepath=FLAGS.eval_data, example_parser=example_parser, batch_size=FLAGS.batch_size))
+    #predicts_df = pd.DataFrame.from_dict(results)
+    #predicts_df['probabilities'] = predicts_df['probabilities'].apply(lambda x: x[0])
+    #test_df = pd.read_csv("../../dataset/wechat_algo_data1/dataframe/test.csv")
+    #predicts_df['read_comment'] = test_df['read_comment']
+    #predicts_df.to_csv("predictions.csv")
+    #print("after evaluate")
 
 if __name__ == "__main__":
     tf.logging.set_verbosity(tf.logging.INFO)

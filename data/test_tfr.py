@@ -1,3 +1,4 @@
+# coding: utf-8
 import tensorflow as tf
 
 def _example_parser(tfr_data):
@@ -26,7 +27,7 @@ def _example_parser(tfr_data):
 
     labels = parsed_features.pop('Label')
 
-    return parsed_features, labels
+    return parsed_features, {'Label': labels}
 
 def input_fn(tfr_file_path, num_epochs, shuffle, batch_size, shuffle_buffer_size=10000):
     dataset = tf.data.TFRecordDataset(tfr_file_path)
