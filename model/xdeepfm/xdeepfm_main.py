@@ -7,13 +7,13 @@ import pandas as pd
 
 from tfrecord_input import input_fn_tfr
 from build_feature_columns import build_feature_columns
-from wide_and_deep_model import wide_and_deep_model_fn
+from xdeepfm_model import xdeepfm_model_fn
 
 # 定义输入参数
 flags = tf.app.flags
 
 # 训练参数
-flags.DEFINE_string("model_dir", "./model_dir_wide_deep", "Directory where model parameters, graph, etc are saved")
+flags.DEFINE_string("model_dir", "./model_dir", "Directory where model parameters, graph, etc are saved")
 flags.DEFINE_string("output_dir", "./output_dir", "Directory where pb file are saved")
 
 flags.DEFINE_string("train_data", "/data/deep-recom-system/data/criteo_x4/train.tr.tfrecords", "Path to the train data")
@@ -29,15 +29,14 @@ flags.DEFINE_integer("save_checkpoints_steps", 100, "Save checkpoints every this
 
 # 模型参数
 flags.DEFINE_integer("batch_size", 32, "Training batch size")
-flags.DEFINE_float("wide_part_learning_rate", 0.005, "Wide part learning rate")
-flags.DEFINE_float("deep_part_learning_rate", 0.001, "Deep part learning rate")
-flags.DEFINE_string("deep_part_optimizer", "Adam",
-                    "Wide part optimizer, supported strings are in {'Adagrad', 'Adam', 'Ftrl', 'RMSProp', 'SGD'}")
+flags.DEFINE_float("learning_rate", 0.005, "Learning rate")
 flags.DEFINE_string("hidden_units", "512,256,128",
                     "Comma-separated list of number of units in each hidden layer of the deep part")
-flags.DEFINE_boolean("batch_norm", True, "Perform batch normalization (True or False)")
-flags.DEFINE_float("dropout_rate", 0, "Dropout rate")
 flags.DEFINE_string("exporter", "final", "Model exporter type")
+flags.DEFINE_integer("embedding_dim", 4, "Embedding dimension") # 特征sparse数据的embed设置的是4
+# 超参数卷积核h越大，模型能够捕捉的高阶特征交互就越丰富，同时更多的参数和更复杂的计算
+flags.DEFINE_string("cin_layer_feature_maps", "64,32,16",
+                    "Comma-separated list of number of feature map in each CIN layer")
 
 FLAGS = flags.FLAGS
 
@@ -45,24 +44,22 @@ def main(unused_argv):
     """训练入口"""
     
     # 1.构建特征处理列.
-    sparse_feature_columns, dense_feature_columns  = build_feature_columns()
+    sparse_feature_columns, dense_feature_columns = build_feature_columns()
     global total_feature_columns
     total_feature_columns = sparse_feature_columns + dense_feature_columns
 
     params = {
-        "wide_part_feature_columns": sparse_feature_columns,
-        "deep_part_feature_columns": dense_feature_columns,
+        "dense_feature_columns": dense_feature_columns,
+        "category_feature_columns": sparse_feature_columns,
+        "embedding_dim": FLAGS.embedding_dim,
+        "cin_layer_feature_maps": FLAGS.cin_layer_feature_maps.split(','),
         'hidden_units': FLAGS.hidden_units.split(','),
-        "dropout_rate": FLAGS.dropout_rate,
-        "batch_norm": FLAGS.batch_norm,
-        "deep_part_optimizer": FLAGS.deep_part_optimizer,
-        "wide_part_learning_rate": FLAGS.wide_part_learning_rate,
-        "deep_part_learning_rate": FLAGS.deep_part_learning_rate,
+        "learning_rate": FLAGS.learning_rate,
     }
 
     # 2.创建estimator
     estimator = tf.estimator.Estimator(
-        model_fn=wide_and_deep_model_fn,
+        model_fn=xdeepfm_model_fn,
         params=params,
         config=tf.estimator.RunConfig(model_dir=FLAGS.model_dir,
 				      save_checkpoints_steps=FLAGS.save_checkpoints_steps)
@@ -107,9 +104,9 @@ def main(unused_argv):
     # 6.开始训练
     tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
 
-    # 显式的将模型保存在本地, export也可以将模型保存在本地.
-    print("exporting model ...")
-    estimator.export_savedmodel(FLAGS.output_dir, serving_input_receiver_fn)
+    ## 显式的将模型保存在本地, export也可以将模型保存在本地.
+    #print("exporting model ...")
+    #estimator.export_savedmodel(FLAGS.output_dir, serving_input_receiver_fn)
 
     # 打印训练后的指标estimator.evaluate.
     print("Start Evaluate Metrics")
