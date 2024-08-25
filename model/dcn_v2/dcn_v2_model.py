@@ -47,10 +47,10 @@ def deep_cross_network_model_fn(features, labels, mode, params):
         cross_vec = concat_all
         input_dim = int(cross_vec.get_shape()[-1])
         print(input_dim)
-        cross_net = CrossNet(input_dim, params["num_cross_layer"])
-        cross_vec = cross_net(cross_vec)
-        #cross_v2_net = CrossNetV2(input_dim, params["num_cross_layer"])
-        #cross_vec = cross_v2_net(cross_vec)
+        #cross_net = CrossNet(input_dim, params["num_cross_layer"])
+        #cross_vec = cross_net(cross_vec)
+        cross_v2_net = CrossNetV2(input_dim, params["num_cross_layer"])
+        cross_vec = cross_v2_net(cross_vec)
         #for i in range(params["num_cross_layer"]):
         #    cross_vec = cross_layer(x0=concat_all, xl=cross_vec, index=i)
 
