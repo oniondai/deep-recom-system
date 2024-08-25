@@ -1,7 +1,10 @@
 # coding: utf-8
 
+import sys
+sys.path.append('../../')
 import tensorflow as tf
 from tensorflow import feature_column as fc
+from tools.layers.interactions.cross_net import CrossNet, CrossNetV2
 
 def cross_layer(x0, xl, index):
     """
@@ -42,8 +45,14 @@ def deep_cross_network_model_fn(features, labels, mode, params):
 
     with tf.variable_scope("cross_part"):
         cross_vec = concat_all
-        for i in range(params["num_cross_layer"]):
-            cross_vec = cross_layer(x0=concat_all, xl=cross_vec, index=i)
+        input_dim = int(cross_vec.get_shape()[-1])
+        print(input_dim)
+        #cross_net = CrossNet(input_dim, params["num_cross_layer"])
+        #cross_vec = cross_net(cross_vec)
+        cross_v2_net = CrossNetV2(input_dim, params["num_cross_layer"])
+        cross_vec = cross_v2_net(cross_vec)
+        #for i in range(params["num_cross_layer"]):
+        #    cross_vec = cross_layer(x0=concat_all, xl=cross_vec, index=i)
 
     with tf.variable_scope("dnn_part"):
         dnn_vec = concat_all
